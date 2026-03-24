@@ -1,83 +1,87 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Opus (claude.ai/code) when working with code in this repository.
 
 ## Project Overview
 
-MoneyPrinterV2 (MPV2) is a Python 3.12 CLI tool that automates four online workflows:
-1. **YouTube Shorts** — generate video (LLM script → TTS → images → MoviePy composite) and upload via Selenium
-2. **Twitter/X Bot** — generate and post tweets via Selenium
-3. **Affiliate Marketing** — scrape Amazon product info, generate pitch, share on Twitter
-4. **Local Business Outreach** — scrape Google Maps (Go binary), extract emails, send cold outreach via SMTP
+MoneyPrinterV2 is a Python 3.12 CLI automation tool with 4 workflows:
+1. YouTube Shorts generation + upload
+2. Twitter/X post generation + publishing
+3. Amazon affiliate pitch generation + posting to Twitter
+4. Local business scraping + outreach email sending
 
-There is no web UI, no REST API, no test suite, no CI, and no linting config.
+It is a terminal app (no web API/UI).
 
-## Running the Application
+## Commands You’ll Actually Use
 
 ```bash
-# First-time setup
-cp config.example.json config.json   # then fill in values
-python -m venv venv && source venv/bin/activate
+# Initial setup
+cp config.example.json config.json
+python -m venv venv
+source venv/bin/activate          # Windows: .\\venv\\Scripts\\activate
 pip install -r requirements.txt
 
-# macOS quick setup (auto-configures Ollama, ImageMagick, Firefox profile)
+# Optional macOS helper (sets up local defaults)
 bash scripts/setup_local.sh
 
-# Preflight check (validates services are reachable)
+# Validate local dependencies/config reachability
 python scripts/preflight_local.py
 
-# Run
+# Run interactive CLI (must be run from repo root)
 python src/main.py
+
+# Run headless scheduled job directly
+python src/cron.py twitter <account_uuid> <ollama_model>
+python src/cron.py youtube <account_uuid> <ollama_model>
+
+# Convenience script (interactive account selection)
+bash scripts/upload_video.sh
 ```
 
-The app **must** be run from the project root. `python src/main.py` adds `src/` to `sys.path`, so all imports use bare module names (e.g., `from config import *`, not `from src.config import *`).
+## Build / Lint / Test Status
 
-## Architecture
+- There is no build system for this repo.
+- There is currently no lint configuration.
+- There is currently no test suite, so there is no single-test command.
 
-### Entry Points
-- `src/main.py` — interactive menu loop (primary)
-- `src/cron.py` — headless runner invoked by the scheduler as a subprocess: `python src/cron.py <platform> <account_uuid>`
+If you add tests/linting in future work, update this file with exact commands.
 
-### Provider Pattern
-Two service categories use a string-based dispatch pattern configured in `config.json`:
+## Architecture (Big Picture)
 
-| Category | Config key | Options |
-|---|---|---|
-| LLM | `ollama_model` | Ollama (via `ollama` Python SDK). If empty, user picks from available models at startup. |
-| Image gen | — | `nanobanana2` (Gemini image API) |
-| STT | `stt_provider` | `local_whisper`, `third_party_assemblyai` |
+### Entry points and control flow
+- `src/main.py`: interactive menu loop; selects active Ollama model, manages accounts/products, and calls workflow classes.
+- `src/cron.py`: non-interactive runner for scheduled posting/uploading; expects args:
+  - `<platform>` (`twitter` or `youtube`)
+  - `<account_uuid>`
+  - `<ollama_model>` (required in current implementation)
 
-LLM always uses the local Ollama server. Image generation always uses Nano Banana 2.
+In-app scheduling uses Python `schedule` and spawns subprocesses of `src/cron.py`.
 
-### Key Modules
-- **`src/llm_provider.py`** — unified `generate_text(prompt)` function using the Ollama Python SDK
-- **`src/config.py`** — 30+ getter functions, each re-reads `config.json` on every call (no caching). `ROOT_DIR` = project root, computed as `os.path.dirname(sys.path[0])`
-- **`src/cache.py`** — JSON file persistence in `.mp/` directory (accounts, videos, posts, products)
-- **`src/constants.py`** — menu strings, Selenium selectors (YouTube Studio, X.com, Amazon)
-- **`src/classes/YouTube.py`** — most complex class; full pipeline: topic → script → metadata → image prompts → images → TTS → subtitles → MoviePy combine → Selenium upload
-- **`src/classes/Twitter.py`** — Selenium automation against x.com
-- **`src/classes/AFM.py`** — Amazon scraping + LLM pitch generation
-- **`src/classes/Outreach.py`** — Google Maps scraper (requires Go) + email sending via yagmail
-- **`src/classes/Tts.py`** — KittenTTS wrapper
+### Core module responsibilities
+- `src/classes/YouTube.py`: main pipeline orchestration (topic/script/metadata → prompts/images → TTS → subtitles/video composition → Selenium upload).
+- `src/classes/Twitter.py`: generates post text and publishes via Selenium on `x.com`.
+- `src/classes/AFM.py`: scrapes Amazon product info, generates pitch via LLM, publishes via Twitter class.
+- `src/classes/Outreach.py`: downloads/builds Go Google Maps scraper, extracts websites/emails, sends outreach via SMTP (`yagmail`).
+- `src/classes/Tts.py`: KittenTTS wrapper.
+- `src/llm_provider.py`: Ollama client wrapper (`list_models`, `select_model`, `generate_text`); model selection is process-global.
+- `src/config.py`: config getters from `config.json` (re-reads file on each call; no central cached config object).
+- `src/cache.py`: JSON persistence for accounts, posts, videos, products.
 
-### Data Storage
-All persistent state lives in `.mp/` at the project root as JSON files (`youtube.json`, `twitter.json`, `afm.json`). This directory also serves as scratch space for temporary WAV, PNG, SRT, and MP4 files — non-JSON files are cleaned on each run by `rem_temp_files()`.
+### Persistence model
+- Runtime state is stored in `.mp/` as JSON files:
+  - `youtube.json`, `twitter.json`, `afm.json`
+- `.mp/` also stores temporary generated media; temp cleanup removes non-JSON files.
 
-### Browser Automation
-Selenium uses pre-authenticated Firefox profiles (never handles login). The profile path is stored per-account in the cache JSON and also in `config.json` as a default.
+### Important integration constraints
+- Selenium automation assumes Firefox profiles are already authenticated.
+- Image/subtitle path depends on ImageMagick configured in `config.json`.
+- LLM is local Ollama (configured by `ollama_base_url` and `ollama_model`).
+- Image generation uses Nano Banana 2 / Gemini image endpoint config.
+- Outreach requires Go installed locally to build/run scraper binary.
 
-### CRON Scheduling
-Uses Python's `schedule` library (in-process, not OS cron). The scheduled job spawns `subprocess.run(["python", "src/cron.py", platform, account_id])`.
+## Working Rules for This Codebase
 
-## Configuration
-
-All config lives in `config.json` at the project root. See `config.example.json` for the full template and `docs/Configuration.md` for reference. Key external dependencies to configure:
-- **ImageMagick** — required for MoviePy subtitle rendering (`imagemagick_path`)
-- **Firefox profile** — must be pre-logged-in to target platforms (`firefox_profile`)
-- **Ollama** — for LLM text generation (via `ollama` Python SDK)
-- **Nano Banana 2** — for image generation (Gemini image API)
-- **Go** — only needed for Outreach (Google Maps scraper)
-
-## Contributing
-
-PRs go against `main`. One feature/fix per PR. Open an issue first. Use `WIP` label for in-progress PRs.
+- Run commands from project root (`python src/main.py`), because imports and `ROOT_DIR` assumptions depend on this.
+- Keep import style consistent with existing code (`from config import ...`, not `from src.config import ...`).
+- Prefer extending existing workflow classes/modules over introducing new abstractions.
+- When changing scheduling behavior, update both interactive scheduler logic (`main.py`) and direct cron behavior (`cron.py`) if needed.

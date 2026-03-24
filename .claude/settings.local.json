@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python src/main.py)",
+      "Bash(./venv/Scripts/python.exe src/main.py)",
+      "Bash(./venv/Scripts/python.exe -c \"import selenium; print\\(selenium.__version__\\)\")",
+      "Bash(./venv/Scripts/pip.exe show:*)",
+      "Bash(./venv/Scripts/pip.exe index:*)",
+      "Bash(./venv/Scripts/pip.exe install:*)",
+      "Bash(./venv/Scripts/python.exe -c \"import moviepy; print\\(moviepy.__version__\\)\")",
+      "Bash(./venv/Scripts/python.exe -c \"import moviepy.editor; print\\(''ok''\\)\")",
+      "Bash(./venv/Scripts/python.exe -c \":*)"
+    ]
+  }
+}
