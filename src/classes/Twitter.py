@@ -11,7 +11,6 @@ from llm_provider import generate_text
 from typing import List, Optional
 from datetime import datetime
 from termcolor import colored
-from selenium_firefox import *
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.firefox.service import Service
@@ -19,6 +18,7 @@ from selenium.webdriver.firefox.options import Options
 from webdriver_manager.firefox import GeckoDriverManager
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver import Firefox
 
 
 class Twitter:
@@ -65,7 +65,7 @@ class Twitter:
         self.service: Service = Service(GeckoDriverManager().install())
 
         # Initialize the browser
-        self.browser: webdriver.Firefox = webdriver.Firefox(
+        self.browser = Firefox(
             service=self.service, options=self.options
         )
         self.wait: WebDriverWait = WebDriverWait(self.browser, 30)
@@ -80,7 +80,7 @@ class Twitter:
         Returns:
             None
         """
-        bot: webdriver.Firefox = self.browser
+        bot = self.browser
         verbose: bool = get_verbose()
 
         bot.get("https://x.com/compose/post")

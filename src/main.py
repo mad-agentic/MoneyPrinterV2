@@ -44,6 +44,7 @@ def main():
     # Get user input
     # user_input = int(question("Select an option: "))
     valid_input = False
+    user_input = 0
     while not valid_input:
         try:
     # Show user options
@@ -117,7 +118,7 @@ def main():
                         break
 
                 if account_to_delete is None:
-                    error("Invalid account selected. Please try again.", "red")
+                    error("Invalid account selected. Please try again.")
                 else:
                     confirm = question(f"Are you sure you want to delete '{account_to_delete['nickname']}'? (Yes/No): ").strip().lower()
 
@@ -136,7 +137,7 @@ def main():
                     selected_account = account
 
             if selected_account is None:
-                error("Invalid account selected. Please try again.", "red")
+                error("Invalid account selected. Please try again.")
                 main()
             else:
                 youtube = YouTube(
@@ -268,7 +269,7 @@ def main():
                         break
 
                 if account_to_delete is None:
-                    error("Invalid account selected. Please try again.", "red")
+                    error("Invalid account selected. Please try again.")
                 else:
                     confirm = question(f"Are you sure you want to delete '{account_to_delete['nickname']}'? (Yes/No): ").strip().lower()
 
@@ -287,7 +288,7 @@ def main():
                     selected_account = account
 
             if selected_account is None:
-                error("Invalid account selected. Please try again.", "red")
+                error("Invalid account selected. Please try again.")
                 main()
             else:
                 twitter = Twitter(selected_account["id"], selected_account["nickname"], selected_account["firefox_profile"], selected_account["topic"])
@@ -378,6 +379,10 @@ def main():
                     if acc["id"] == twitter_uuid:
                         account = acc
 
+                if account is None:
+                    error("Twitter account UUID not found. Please create/select a valid account first.")
+                    return
+
                 add_product({
                     "id": str(uuid4()),
                     "affiliate_link": affiliate_link,
@@ -406,7 +411,7 @@ def main():
                     selected_product = product
 
             if selected_product is None:
-                error("Invalid product selected. Please try again.", "red")
+                error("Invalid product selected. Please try again.")
                 main()
             else:
                 # Find the account
@@ -414,6 +419,10 @@ def main():
                 for acc in get_accounts("twitter"):
                     if acc["id"] == selected_product["twitter_uuid"]:
                         account = acc
+
+                if account is None:
+                    error("No matching Twitter account found for this product.")
+                    return
 
                 afm = AffiliateMarketing(selected_product["affiliate_link"], account["firefox_profile"], account["id"], account["nickname"], account["topic"])
 
@@ -431,7 +440,7 @@ def main():
             print(colored(" => Quitting...", "blue"))
         sys.exit(0)
     else:
-        error("Invalid option selected. Please try again.", "red")
+        error("Invalid option selected. Please try again.")
         main()
     
 

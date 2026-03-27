@@ -1,0 +1,11 @@
+{
+  "typeCheckingMode": "off",
+  "exclude": [
+    "**/.venv",
+    "**/.venv/**",
+    "**/venv",
+    "**/venv/**",
+    "**/site-packages/**",
+    "**/vscode-terminal*/**"
+  ]
+}

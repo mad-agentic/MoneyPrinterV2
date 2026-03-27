@@ -17,3 +17,5 @@ faster-whisper
 srt_equalizer
 undetected_chromedriver
 platformdirs
+fastapi
+uvicorn

@@ -1,0 +1,126 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --bg-primary: #050508;
+    --bg-secondary: #0c0d14;
+    --bg-glass: rgba(15, 17, 26, 0.6);
+    --text-primary: #f8fafc;
+    --text-secondary: #8b95a5;
+    --border-color: rgba(255, 255, 255, 0.06);
+    
+    --brand-cyan: #00e5ff;
+    --brand-cyan-glow: rgba(0, 229, 255, 0.3);
+    --brand-purple: #9d4edd;
+    --brand-purple-glow: rgba(157, 78, 221, 0.3);
+    
+    --space-1: 0.25rem;
+    --space-2: 0.5rem;
+    --space-4: 1rem;
+    --space-6: 1.5rem;
+    --space-8: 2rem;
+  }
+
+  body {
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: 'Inter', system-ui, sans-serif;
+    /* Subtle glowing orbs in the background */
+    background-image: 
+      radial-gradient(circle at 15% 50%, rgba(0, 229, 255, 0.08), transparent 25%),
+      radial-gradient(circle at 85% 30%, rgba(157, 78, 221, 0.08), transparent 25%);
+    background-attachment: fixed;
+    margin: 0;
+    -webkit-font-smoothing: antialiased;
+  }
+}
+
+@layer components {
+  /* Glass Panel Architecture */
+  .glass-panel {
+    background: var(--bg-glass);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid var(--border-color);
+    box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+    border-radius: 1.25rem;
+  }
+  
+  /* Navigation Tab Patterns */
+  .nav-item {
+    display: flex;
+    align-items: center;
+    padding: var(--space-4);
+    border-radius: 1rem;
+    color: var(--text-secondary);
+    font-weight: 500;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    border: 1px solid transparent;
+    position: relative;
+    overflow: hidden;
+  }
+  
+  .nav-item:hover {
+    color: var(--text-primary);
+    background: rgba(255, 255, 255, 0.03);
+  }
+
+  .nav-item.active-cyan {
+    color: var(--brand-cyan);
+    background: rgba(0, 229, 255, 0.05);
+    border-color: rgba(0, 229, 255, 0.2);
+    box-shadow: 0 0 20px var(--brand-cyan-glow) inset;
+  }
+
+  .nav-item.active-purple {
+    color: var(--brand-purple);
+    background: rgba(157, 78, 221, 0.05);
+    border-color: rgba(157, 78, 221, 0.2);
+    box-shadow: 0 0 20px var(--brand-purple-glow) inset;
+  }
+  
+  /* Primary Button Architecture */
+  .btn-premium {
+    position: relative;
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0));
+    backdrop-filter: blur(10px);
+    border: 1px solid var(--border-color);
+    padding: 0.6rem 1.2rem;
+    border-radius: 0.75rem;
+    color: var(--text-primary);
+    font-weight: 600;
+    transition: all 0.3s ease;
+    overflow: hidden;
+    z-index: 1;
+  }
+  
+  .btn-premium::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: linear-gradient(135deg, var(--brand-cyan), var(--brand-purple));
+    opacity: 0;
+    z-index: -1;
+    transition: opacity 0.3s ease;
+  }
+  
+  .btn-premium:hover::before {
+    opacity: 1;
+  }
+  
+  .btn-premium:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 20px rgba(0, 229, 255, 0.2);
+    border-color: transparent;
+  }
+
+  /* Card Animations */
+  .premium-card {
+    transition: transform 0.3s ease, box-shadow 0.3s ease, border-color 0.3s ease;
+  }
+  
+  .premium-card:hover {
+    transform: translateY(-4px) scale(1.01);
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.4);
+  }
+}

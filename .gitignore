@@ -8,3 +8,5 @@ niche.txt
 *.exe
 auto.sh
 .DS_Store
+/.agent
+.env

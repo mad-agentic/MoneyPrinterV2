@@ -7,12 +7,12 @@ from config import *
 from constants import *
 from llm_provider import generate_text
 from .Twitter import Twitter
-from selenium_firefox import *
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.firefox.service import Service
 from selenium.webdriver.firefox.options import Options
 from webdriver_manager.firefox import GeckoDriverManager
+from selenium.webdriver import Firefox
 
 
 class AffiliateMarketing:
@@ -63,7 +63,7 @@ class AffiliateMarketing:
         self.service: Service = Service(GeckoDriverManager().install())
 
         # Initialize the browser
-        self.browser: webdriver.Firefox = webdriver.Firefox(
+        self.browser = Firefox(
             service=self.service, options=self.options
         )
 

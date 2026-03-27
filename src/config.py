@@ -5,7 +5,7 @@ import srt_equalizer
 
 from termcolor import colored
 
-ROOT_DIR = os.path.dirname(sys.path[0])
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 def assert_folder_structure() -> None:
     """
