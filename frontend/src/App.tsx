@@ -593,8 +593,8 @@ export default function App() {
                     )}
                   </button>
                   {gallery[0].type === 'image' && selectedGalleryImages.includes(gallery[0].url) && (
-                    <div className="absolute top-2 right-2 rounded-full bg-emerald-500/90 text-white p-1">
-                      <Check className="w-3 h-3" />
+                    <div className="absolute top-2 right-2 rounded-full bg-emerald-500/90 text-white w-6 h-6 flex items-center justify-center font-bold text-xs shadow-lg">
+                      {selectedGalleryImages.indexOf(gallery[0].url) + 1}
                     </div>
                   )}
                   <div className="absolute bottom-0 left-0 w-full px-2 py-1.5 bg-gradient-to-t from-black/90 to-transparent">
@@ -615,7 +615,7 @@ export default function App() {
                             prev.includes(item.url) ? prev.filter((u) => u !== item.url) : [...prev, item.url]
                           );
                         }}
-                        className={`aspect-square rounded-lg overflow-hidden border transition-all ${
+                        className={`aspect-square rounded-lg overflow-hidden border transition-all relative ${
                           item.type === 'image' && selectedGalleryImages.includes(item.url)
                             ? 'border-emerald-400/80 ring-1 ring-emerald-300/60'
                             : 'border-white/5 hover:border-cyan-500/40'
@@ -626,6 +626,11 @@ export default function App() {
                           ? <video src={`${API}${item.url}`} muted className="w-full h-full object-cover" />
                           : <img src={`${API}${item.url}`} className="w-full h-full object-cover hover:scale-105 transition-transform" alt="" />
                         }
+                        {item.type === 'image' && selectedGalleryImages.includes(item.url) && (
+                          <div className="absolute top-1 right-1 rounded-full bg-emerald-500/90 text-white w-5 h-5 flex items-center justify-center font-bold text-[10px] shadow-md">
+                            {selectedGalleryImages.indexOf(item.url) + 1}
+                          </div>
+                        )}
                       </button>
                     ))}
                   </div>

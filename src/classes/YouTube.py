@@ -878,10 +878,19 @@ class YouTube:
         self.tts_path = audio_path
         self.subtitle_path = subtitles_path
         self.subtitle_preview = self._extract_srt_preview(subtitles_path)
+        
+        # Read full subtitle content for session persistence
+        try:
+            with open(subtitles_path, "r", encoding="utf-8") as srt_file:
+                srt_content = srt_file.read()
+        except Exception as read_exc:
+            srt_content = ""
+            warning(f"Failed to read subtitle content: {read_exc}")
 
         return {
             "audio_path": audio_path,
             "subtitle_path": subtitles_path,
+            "subtitle_content": srt_content,
             "subtitle_preview": self.subtitle_preview,
             "voice_used": self.voice_used,
             "tts_text": self.script,
@@ -1250,6 +1259,7 @@ class YouTube:
         subtitles = None
         self.subtitle_path = ""
         self.subtitle_preview = ""
+        srt_content = ""
         try:
             if self._session:
                 self._session.save_stage(
@@ -1272,6 +1282,13 @@ class YouTube:
             except Exception as eq_exc:
                 # Keep original subtitles if equalizer rejects absolute paths or fails.
                 warning(f"Subtitle equalizer failed, using raw subtitles: {eq_exc}")
+            # Read subtitle text content for session persistence
+            try:
+                with open(subtitles_path, "r", encoding="utf-8") as srt_file:
+                    srt_content = srt_file.read()
+            except Exception as read_exc:
+                srt_content = ""
+                warning(f"Failed to read subtitle content: {read_exc}")
             # Keep subtitles inside a bottom safe-area to prevent cropped text.
             subtitle_position = ("center", 1460) if bool(self.english_cc_bottom) else ("center", 1520)
             info(
@@ -1281,6 +1298,22 @@ class YouTube:
             subtitles = SubtitlesClip(subtitles_path, make_textclip=generator).with_position(subtitle_position)
             self.subtitle_path = subtitles_path
             self.subtitle_preview = self._extract_srt_preview(subtitles_path)
+            # Save subtitle content to session after preview extraction
+            if self._session:
+                self._session.save_stage(
+                    "subtitles_generated",
+                    subject=self.subject,
+                    script=self.script,
+                    tts_text=self.script,
+                    audio_path=self.tts_path,
+                    voice_used=getattr(self, "voice_used", ""),
+                    subtitle_path=subtitles_path,
+                    subtitle_content=srt_content,
+                    subtitle_preview=self.subtitle_preview,
+                    english_cc_bottom=bool(self.english_cc_bottom),
+                    metadata=self.metadata,
+                    image_paths=self.images,
+                )
         except Exception as e:
             warning(f"Failed to generate subtitles, continuing without subtitles: {e}")
 
