@@ -50,8 +50,13 @@ async def _log_generator(request) -> AsyncGenerator[str, None]:
             except asyncio.TimeoutError:
                 # Heartbeat to keep connection alive
                 yield f"data: {json.dumps({'ts': time.strftime('%H:%M:%S'), 'level': 'ping', 'message': ''})}\n\n"
+            except asyncio.CancelledError:
+                break
+    except (asyncio.CancelledError, ConnectionResetError, BrokenPipeError):
+        return
     finally:
-        _subscribers.remove(q)
+        if q in _subscribers:
+            _subscribers.remove(q)
 
 
 def get_log_history() -> list:

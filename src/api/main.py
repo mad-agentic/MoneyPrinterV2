@@ -3,9 +3,15 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+import asyncio
 import sys
 import os
 import glob
+import json
+from typing import Any
+
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 # Ensure src module is accessible
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -21,6 +27,7 @@ from api.session_manager import list_sessions, rename_session, get_session, crea
 # ── Project .mp directory (project root, NOT src/.mp) ──────────────────────
 MP_DIR = os.path.join(ROOT_DIR, '.mp')
 os.makedirs(MP_DIR, exist_ok=True)
+CONFIG_PATH = os.path.join(ROOT_DIR, 'config.json')
 
 app = FastAPI(title="MoneyPrinterV2 API Hub", description="REST API for MPV2 UI")
 app.include_router(youtube_router)
@@ -132,6 +139,10 @@ class CreateSessionBody(BaseModel):
     name: str = ""
 
 
+class ConfigUpdateBody(BaseModel):
+    values: dict[str, Any]
+
+
 @app.post("/system/sessions")
 def create_new_session(body: CreateSessionBody):
     session = create_session(body.name.strip())
@@ -143,6 +154,67 @@ def do_rename_session(session_id: str, body: RenameBody):
     if not ok:
         raise HTTPException(status_code=404, detail="Session not found")
     return {"ok": True}
+
+
+# ── Config ───────────────────────────────────────────────────────────────────
+
+EDITABLE_CONFIG_KEYS = {
+    "verbose",
+    "headless",
+    "threads",
+    "is_for_kids",
+    "stt_provider",
+    "whisper_model",
+    "whisper_device",
+    "whisper_compute_type",
+    "whisper_vad_filter",
+    "whisper_beam_size",
+    "tts_voice",
+    "tts_strict_mode",
+    "video_encode_preset",
+    "video_encode_crf",
+    "script_sentence_length",
+    "font",
+}
+
+
+def _read_config() -> dict[str, Any]:
+    if not os.path.exists(CONFIG_PATH):
+        raise HTTPException(status_code=500, detail="config.json not found")
+    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+        return dict(json.load(f))
+
+
+def _write_config(payload: dict[str, Any]) -> None:
+    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+
+
+@app.get("/system/config")
+def get_config():
+    return _read_config()
+
+
+@app.patch("/system/config")
+def patch_config(body: ConfigUpdateBody):
+    incoming = body.values or {}
+    if not isinstance(incoming, dict):
+        raise HTTPException(status_code=400, detail="values must be an object")
+
+    cfg = _read_config()
+    rejected = [k for k in incoming.keys() if k not in EDITABLE_CONFIG_KEYS]
+    if rejected:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported config keys: {', '.join(sorted(rejected))}",
+        )
+
+    for key, value in incoming.items():
+        cfg[key] = value
+
+    _write_config(cfg)
+    return {"ok": True, "updated": sorted(list(incoming.keys())), "config": cfg}
 
 # ── Accounts ─────────────────────────────────────────────────────────────────
 

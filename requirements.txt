@@ -1,7 +1,8 @@
 wheel
 termcolor
 schedule
-requests
+requests==2.32.5
+chardet<6
 kittentts @ https://github.com/KittenML/KittenTTS/releases/download/0.8.1/kittentts-0.8.1-py3-none-any.whl
 soundfile
 prettytable

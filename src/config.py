@@ -233,6 +233,16 @@ def get_tts_voice() -> str:
     with open(os.path.join(ROOT_DIR, "config.json"), "r") as file:
         return json.load(file).get("tts_voice", "Jasper")
 
+def get_tts_strict_mode() -> bool:
+    """
+    Gets whether TTS should fail the run when any chunk remains failed after fallback.
+
+    Returns:
+        strict_mode (bool): True to fail hard on partial TTS success.
+    """
+    with open(os.path.join(ROOT_DIR, "config.json"), "r") as file:
+        return bool(json.load(file).get("tts_strict_mode", False))
+
 def get_assemblyai_api_key() -> str:
     """
     Gets the AssemblyAI API key.
@@ -282,6 +292,46 @@ def get_whisper_compute_type() -> str:
     """
     with open(os.path.join(ROOT_DIR, "config.json"), "r") as file:
         return json.load(file).get("whisper_compute_type", "int8")
+
+def get_whisper_vad_filter() -> bool:
+    """
+    Gets whether Whisper VAD filter is enabled.
+
+    Returns:
+        enabled (bool): True to enable VAD filter.
+    """
+    with open(os.path.join(ROOT_DIR, "config.json"), "r") as file:
+        return bool(json.load(file).get("whisper_vad_filter", False))
+
+def get_whisper_beam_size() -> int:
+    """
+    Gets Whisper beam size.
+
+    Returns:
+        beam_size (int): Beam width for decoding.
+    """
+    with open(os.path.join(ROOT_DIR, "config.json"), "r") as file:
+        return int(json.load(file).get("whisper_beam_size", 1))
+
+def get_video_encode_preset() -> str:
+    """
+    Gets ffmpeg x264 preset for video encoding speed/quality tradeoff.
+
+    Returns:
+        preset (str): x264 preset value.
+    """
+    with open(os.path.join(ROOT_DIR, "config.json"), "r") as file:
+        return str(json.load(file).get("video_encode_preset", "veryfast"))
+
+def get_video_encode_crf() -> int:
+    """
+    Gets ffmpeg CRF value for final video encoding.
+
+    Returns:
+        crf (int): Constant Rate Factor.
+    """
+    with open(os.path.join(ROOT_DIR, "config.json"), "r") as file:
+        return int(json.load(file).get("video_encode_crf", 24))
     
 def equalize_subtitles(srt_path: str, max_chars: int = 10) -> None:
     """

@@ -6,8 +6,59 @@ import os
 import atexit
 import shutil
 import tempfile
+from typing import Any, List, Optional
+
 import requests
 import assemblyai as aai
+
+# Map full language names → ISO 639-1 codes accepted by faster-whisper.
+_WHISPER_LANGUAGE_CODES: set[str] = {
+    "af","am","ar","as","az","ba","be","bg","bn","bo","br","bs","ca","cs",
+    "cy","da","de","el","en","es","et","eu","fa","fi","fo","fr","gl","gu",
+    "ha","haw","he","hi","hr","ht","hu","hy","id","is","it","ja","jw","ka",
+    "kk","km","kn","ko","la","lb","ln","lo","lt","lv","mg","mi","mk","ml",
+    "mn","mr","ms","mt","my","ne","nl","nn","no","oc","pa","pl","ps","pt",
+    "ro","ru","sa","sd","si","sk","sl","sn","so","sq","sr","su","sv","sw",
+    "ta","te","tg","th","tk","tl","tr","tt","uk","ur","uz","vi","yi","yo",
+    "zh","yue",
+}
+_WHISPER_LANGUAGE_NAME_TO_CODE: dict[str, str] = {
+    "afrikaans": "af", "amharic": "am", "arabic": "ar", "assamese": "as",
+    "azerbaijani": "az", "bashkir": "ba", "belarusian": "be", "bulgarian": "bg",
+    "bengali": "bn", "tibetan": "bo", "breton": "br", "bosnian": "bs",
+    "catalan": "ca", "czech": "cs", "welsh": "cy", "danish": "da",
+    "german": "de", "greek": "el", "english": "en", "spanish": "es",
+    "estonian": "et", "basque": "eu", "persian": "fa", "finnish": "fi",
+    "faroese": "fo", "french": "fr", "galician": "gl", "gujarati": "gu",
+    "hausa": "ha", "hawaiian": "haw", "hebrew": "he", "hindi": "hi",
+    "croatian": "hr", "haitian creole": "ht", "hungarian": "hu", "armenian": "hy",
+    "indonesian": "id", "icelandic": "is", "italian": "it", "japanese": "ja",
+    "javanese": "jw", "georgian": "ka", "kazakh": "kk", "khmer": "km",
+    "kannada": "kn", "korean": "ko", "latin": "la", "luxembourgish": "lb",
+    "lingala": "ln", "lao": "lo", "lithuanian": "lt", "latvian": "lv",
+    "malagasy": "mg", "maori": "mi", "macedonian": "mk", "malayalam": "ml",
+    "mongolian": "mn", "marathi": "mr", "malay": "ms", "maltese": "mt",
+    "burmese": "my", "nepali": "ne", "dutch": "nl", "norwegian nynorsk": "nn",
+    "norwegian": "no", "occitan": "oc", "punjabi": "pa", "polish": "pl",
+    "pashto": "ps", "portuguese": "pt", "romanian": "ro", "russian": "ru",
+    "sanskrit": "sa", "sindhi": "sd", "sinhala": "si", "slovak": "sk",
+    "slovenian": "sl", "shona": "sn", "somali": "so", "albanian": "sq",
+    "serbian": "sr", "sundanese": "su", "swedish": "sv", "swahili": "sw",
+    "tamil": "ta", "telugu": "te", "tajik": "tg", "thai": "th",
+    "turkmen": "tk", "tagalog": "tl", "turkish": "tr", "tatar": "tt",
+    "ukrainian": "uk", "urdu": "ur", "uzbek": "uz", "vietnamese": "vi",
+    "yiddish": "yi", "yoruba": "yo", "chinese": "zh", "cantonese": "yue",
+}
+
+
+def _resolve_whisper_language(language: str) -> Optional[str]:
+    """Convert a language name or code to a faster-whisper ISO code, or None."""
+    lang = (language or "").strip().lower()
+    if not lang:
+        return None
+    if lang in _WHISPER_LANGUAGE_CODES:
+        return lang
+    return _WHISPER_LANGUAGE_NAME_TO_CODE.get(lang)
 
 from utils import *
 from cache import *
@@ -17,7 +68,6 @@ from config import *
 from status import *
 from uuid import uuid4
 from constants import *
-from typing import Any, List, Optional
 from moviepy import (
     AudioFileClip,
     ColorClip,
@@ -92,6 +142,9 @@ class YouTube:
         self.metadata: dict = {}
         self.image_prompts: List[str] = []
         self.images = []
+        self.tts_path: str = ""  # Audio file path; set by generate_script_to_speech()
+        self.voice_used: str = ""
+        self.english_cc_bottom: bool = False
 
         # Browser is lazy-initialized (only needed for upload, not generation)
         self._browser_initialized: bool = False
@@ -273,15 +326,25 @@ class YouTube:
         info(f"\n📚 [Session {session_id}] === STAGE: TOPIC GENERATION ===")
         info(f"    Niche: {self.niche}")
         
-        completion = self.generate_response(
-            f"Please generate a specific video idea that takes about the following topic: {self.niche}. Make it exactly one sentence. Only return the topic, nothing else."
+        topic_prompt = (
+            f"Please generate a specific video idea that takes about the following topic: {self.niche}. "
+            "Make it exactly one sentence. Only return the topic, nothing else."
         )
+        completion = self.generate_response(topic_prompt)
 
         if not completion:
             error("Failed to generate Topic.")
 
         self.subject = completion
         info(f"    Generated Subject: {completion[:100]}...")
+
+        if self._session:
+            self._session.save_stage(
+                "topic",
+                subject=self.subject,
+                topic_prompt=topic_prompt,
+                topic_output=completion,
+            )
 
         return completion
 
@@ -337,6 +400,15 @@ class YouTube:
         session_id = self._session.session_id if self._session else "unknown"
         info(f"    Generated script: {len(completion)} chars, {len(completion.split())} words")
 
+        if self._session:
+            self._session.save_stage(
+                "script",
+                subject=self.subject,
+                script=self.script,
+                script_prompt=prompt.strip(),
+                script_output=completion,
+            )
+
         return completion
 
     def generate_metadata(self) -> dict:
@@ -348,12 +420,15 @@ class YouTube:
         """
         session_id = self._session.session_id if self._session else "unknown"
         info(f"\n📋 [Session {session_id}] === STAGE: METADATA GENERATION ===")
-        
+
+        title_prompt = (
+            "Please generate a YouTube Video Title for the following subject, including hashtags: "
+            f"{self.subject}. Only return the title, nothing else. Limit the title under 100 characters."
+        )
+
         title = ""
         for _ in range(3):
-            generated_title = self.generate_response(
-                f"Please generate a YouTube Video Title for the following subject, including hashtags: {self.subject}. Only return the title, nothing else. Limit the title under 100 characters."
-            )
+            generated_title = self.generate_response(title_prompt)
 
             if generated_title:
                 title = generated_title.strip().replace("\n", " ")
@@ -369,13 +444,26 @@ class YouTube:
             if get_verbose():
                 warning("Generated Title is still too long. Trimming automatically.")
 
-        description = self.generate_response(
-            f"Please generate a YouTube Video Description for the following script: {self.script}. Only return the description, nothing else."
+        description_prompt = (
+            f"Please generate a YouTube Video Description for the following script: {self.script}. "
+            "Only return the description, nothing else."
         )
+        description = self.generate_response(description_prompt)
 
         self.metadata = {"title": title, "description": description}
         info(f"    Title: {title}")
         info(f"    Description: {description[:80]}...")
+
+        if self._session:
+            self._session.save_stage(
+                "metadata",
+                subject=self.subject,
+                script=self.script,
+                metadata=self.metadata,
+                metadata_title_prompt=title_prompt,
+                metadata_description_prompt=description_prompt,
+                metadata_output=self.metadata,
+            )
 
         return self.metadata
 
@@ -534,6 +622,7 @@ class YouTube:
         """
 
         image_prompts = []
+        completion = ""
         max_attempts = 2
 
         for attempt in range(1, max_attempts + 1):
@@ -570,6 +659,17 @@ class YouTube:
         if get_verbose():
             for idx, p in enumerate(image_prompts, 1):
                 info(f"  [{idx}] {p[:80]}...")
+
+        if self._session:
+            self._session.save_stage(
+                "prompts",
+                subject=self.subject,
+                script=self.script,
+                image_prompts=self.image_prompts,
+                image_prompt_count=n_prompts,
+                image_prompt_request=prompt.strip(),
+                image_prompt_raw_response=str(completion or "").strip(),
+            )
 
         return image_prompts
 
@@ -691,7 +791,7 @@ class YouTube:
 
         return self.generate_image_nanobanana2(prompt)
 
-    def generate_script_to_speech(self, tts_instance: TTS) -> str:
+    def generate_script_to_speech(self, tts_instance: TTS, force_regenerate: bool = False) -> str:
         """
         Converts the generated script into Speech. Checks session cache first.
 
@@ -706,10 +806,12 @@ class YouTube:
         
         # Normalise whitespace before cache lookup
         self.script = re.sub(r"\s+", " ", self.script).strip()
+        self.voice_used = tts_instance.voice_name
+        tts_cache_key = f"{self.script}||voice:{tts_instance.voice_name}"
 
         # Cache check
-        if self._session:
-            cached_audio = self._session.get_cached_audio(self.script)
+        if self._session and not force_regenerate:
+            cached_audio = self._session.get_cached_audio(tts_cache_key)
             if cached_audio:
                 info(f"💾 Cache HIT audio: {os.path.basename(cached_audio)}")
                 self.tts_path = cached_audio
@@ -717,11 +819,13 @@ class YouTube:
 
         # Determine output path (session cache or .mp root)
         if self._session:
-            path = self._session.audio_cache_path(self.script)
+            path = self._session.audio_cache_path(tts_cache_key)
         else:
             path = os.path.join(ROOT_DIR, ".mp", str(uuid4()) + ".wav")
 
-        info(f"    Synthesizing audio ({len(self.script)} chars)...")
+        if force_regenerate:
+            info("    Re-generating audio from TTS step (cache bypass enabled)...")
+        info(f"    Synthesizing audio ({len(self.script)} chars) with voice: {tts_instance.voice_name}...")
         tts_instance.synthesize(self.script, path)
         self.tts_path = path
 
@@ -731,6 +835,57 @@ class YouTube:
         success(f"✅ Audio generated: {os.path.basename(path)}")
 
         return path
+
+    @staticmethod
+    def _extract_srt_preview(srt_path: str, max_lines: int = 8) -> str:
+        try:
+            with open(srt_path, "r", encoding="utf-8") as file:
+                raw_lines = [line.strip() for line in file.readlines()]
+
+            text_lines = []
+            for line in raw_lines:
+                if not line or line.isdigit() or "-->" in line:
+                    continue
+                text_lines.append(line)
+
+            return "\n".join(text_lines[:max_lines]).strip()
+        except Exception:
+            return ""
+
+    def generate_subtitle_preview(self, tts_instance: TTS, force_regenerate_audio: bool = False) -> dict:
+        """
+        Generate or refresh subtitle preview from the current script/audio without composing the video.
+
+        Args:
+            tts_instance (TTS): Instance of TTS Class.
+            force_regenerate_audio (bool): Bypass cached audio when True.
+
+        Returns:
+            dict: Paths and preview text for the generated subtitle preview.
+        """
+        if not str(self.script).strip():
+            raise ValueError("Cannot generate subtitle preview without script text")
+
+        audio_path = self.generate_script_to_speech(
+            tts_instance,
+            force_regenerate=force_regenerate_audio,
+        )
+        subtitles_path = self.generate_subtitles(
+            audio_path,
+            translate_to_english=bool(self.english_cc_bottom),
+        )
+
+        self.tts_path = audio_path
+        self.subtitle_path = subtitles_path
+        self.subtitle_preview = self._extract_srt_preview(subtitles_path)
+
+        return {
+            "audio_path": audio_path,
+            "subtitle_path": subtitles_path,
+            "subtitle_preview": self.subtitle_preview,
+            "voice_used": self.voice_used,
+            "tts_text": self.script,
+        }
 
     def add_video(self, video: dict) -> None:
         """
@@ -760,7 +915,7 @@ class YouTube:
             with open(cache, "w") as f:
                 f.write(json.dumps(previous_json))
 
-    def generate_subtitles(self, audio_path: str) -> str:
+    def generate_subtitles(self, audio_path: str, translate_to_english: bool = False) -> str:
         """
         Generates subtitles for the audio using the configured STT provider.
 
@@ -774,16 +929,20 @@ class YouTube:
         info(f"\n📝 [Session {session_id}] === STAGE: SUBTITLE GENERATION ===")
         
         provider = str(get_stt_provider() or "local_whisper").lower()
+        if translate_to_english:
+            info("    Subtitle mode: English translation")
         info(f"    STT Provider: {provider}")
 
         if provider == "local_whisper":
-            return self.generate_subtitles_local_whisper(audio_path)
+            return self.generate_subtitles_local_whisper(audio_path, translate_to_english=translate_to_english)
 
         if provider == "third_party_assemblyai":
+            if translate_to_english:
+                warning("AssemblyAI provider does not support in-pipeline translation here. Using original transcript for subtitles.")
             return self.generate_subtitles_assemblyai(audio_path)
 
         warning(f"Unknown stt_provider '{provider}'. Falling back to local_whisper.")
-        return self.generate_subtitles_local_whisper(audio_path)
+        return self.generate_subtitles_local_whisper(audio_path, translate_to_english=translate_to_english)
 
     def generate_subtitles_assemblyai(self, audio_path: str) -> str:
         """
@@ -825,7 +984,7 @@ class YouTube:
         millis = total_millis % 1000
         return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
 
-    def generate_subtitles_local_whisper(self, audio_path: str) -> str:
+    def generate_subtitles_local_whisper(self, audio_path: str, translate_to_english: bool = False) -> str:
         """
         Generates subtitles using local Whisper (faster-whisper).
 
@@ -849,15 +1008,54 @@ class YouTube:
             cuda_markers = ["cublas", "cuda", "cudnn", "cannot be loaded", "failed to load"]
             return any(marker in msg for marker in cuda_markers)
 
-        def _transcribe_to_srt(device: str, compute_type: str) -> str:
+        def _looks_broken_translation(text: str) -> bool:
+            sample = (text or "").lower()
+            if not sample:
+                return False
+
+            # Common artifact pattern seen in failed translation decoding
+            # e.g. "B-letter ... 1-E-..."
+            markers = ["-letter", "letter 1-", "1-e-", "1-a-"]
+            marker_hits = sum(sample.count(m) for m in markers)
+            return marker_hits >= 3
+
+        def _transcribe_to_srt(device: str, compute_type: str, use_language_hint: bool = True) -> str:
+            whisper_model_name = get_whisper_model()
+            whisper_language = _resolve_whisper_language(self.language)
+            task_name = "translate" if translate_to_english else "transcribe"
+            whisper_language_for_run = whisper_language if use_language_hint else None
+
+            info(
+                f"    Loading local Whisper model='{whisper_model_name}' "
+                f"device='{device}' compute='{compute_type}'"
+            )
+            if whisper_language_for_run:
+                info(f"    Whisper language hint: {whisper_language_for_run}")
+            elif translate_to_english:
+                info("    Whisper language hint: auto-detect")
+            info(f"    Whisper task: {task_name}")
+
+            started_at = time.time()
             model = WhisperModel(
-                get_whisper_model(),
+                whisper_model_name,
                 device=device,
                 compute_type=compute_type,
             )
-            segments, _ = model.transcribe(audio_path, vad_filter=True)
+            info("    Whisper model ready. Starting transcription...")
+
+            # Pass the account language so Whisper does not mis-detect
+            # Vietnamese (or other non-English languages) as English.
+            segments, _ = model.transcribe(
+                audio_path,
+                language=whisper_language_for_run,
+                vad_filter=get_whisper_vad_filter(),
+                beam_size=max(1, int(get_whisper_beam_size())),
+                best_of=1,
+                task=task_name,
+            )
 
             lines = []
+            emitted_segments = 0
             for idx, segment in enumerate(segments, start=1):
                 start = self._format_srt_timestamp(segment.start)
                 end = self._format_srt_timestamp(segment.end)
@@ -865,6 +1063,10 @@ class YouTube:
 
                 if not text:
                     continue
+
+                emitted_segments += 1
+                if emitted_segments == 1 or emitted_segments % 20 == 0:
+                    info(f"    Whisper progress: {emitted_segments} subtitle segment(s) parsed...")
 
                 lines.append(str(idx))
                 lines.append(f"{start} --> {end}")
@@ -876,20 +1078,62 @@ class YouTube:
             with open(srt_path, "w", encoding="utf-8") as file:
                 file.write(subtitles)
 
+            elapsed = time.time() - started_at
+            if emitted_segments == 0:
+                warning(
+                    "    Whisper finished but produced 0 subtitle segments. "
+                    "Check audio quality/language settings."
+                )
+            info(
+                f"    Whisper transcription done: {emitted_segments} segment(s) "
+                f"in {elapsed:.1f}s"
+            )
+            info(f"    Subtitle file: {srt_path}")
+
             return srt_path
 
         configured_device = str(get_whisper_device() or "auto").lower()
         configured_compute_type = str(get_whisper_compute_type() or "int8").lower()
 
         try:
-            return _transcribe_to_srt(configured_device, configured_compute_type)
+            srt_path = _transcribe_to_srt(
+                configured_device,
+                configured_compute_type,
+                use_language_hint=True,
+            )
+
+            if translate_to_english:
+                preview = self._extract_srt_preview(srt_path, max_lines=4)
+                if _looks_broken_translation(preview):
+                    warning(
+                        "Detected broken translated subtitles from local Whisper. "
+                        "Retrying with auto language detection..."
+                    )
+                    srt_path = _transcribe_to_srt(
+                        configured_device,
+                        configured_compute_type,
+                        use_language_hint=False,
+                    )
+
+            return srt_path
         except Exception as exc:
             if configured_device != "cpu" and _is_cuda_runtime_error(exc):
                 warning(
                     "CUDA runtime for local Whisper is unavailable. "
                     "Retrying subtitle generation on CPU..."
                 )
-                return _transcribe_to_srt("cpu", "int8")
+                srt_path = _transcribe_to_srt("cpu", "int8", use_language_hint=True)
+
+                if translate_to_english:
+                    preview = self._extract_srt_preview(srt_path, max_lines=4)
+                    if _looks_broken_translation(preview):
+                        warning(
+                            "Detected broken translated subtitles on CPU run. "
+                            "Retrying with auto language detection..."
+                        )
+                        srt_path = _transcribe_to_srt("cpu", "int8", use_language_hint=False)
+
+                return srt_path
             raise
 
     def combine(self) -> str:
@@ -902,6 +1146,11 @@ class YouTube:
         session_id = self._session.session_id if self._session else "unknown"
         info(f"    Composing final video (audio duration: {self._get_audio_duration()}s)...")
         
+        if not self.tts_path or not os.path.exists(self.tts_path):
+            warning(f"⚠️  Audio file not found: {self.tts_path}. Re-running TTS generation...")
+            # This shouldn't happen in normal flow, but let's handle it gracefully
+            raise RuntimeError(f"Audio file missing: {self.tts_path}. Cannot compose video.")
+        
         if self._session:
             combined_image_path = self._session.video_output_path()
         else:
@@ -910,17 +1159,40 @@ class YouTube:
         tts_clip = AudioFileClip(self.tts_path)
         max_duration = tts_clip.duration
 
-        # Make a generator that returns a TextClip when called with consecutive
-        generator = lambda txt: TextClip(
-            text=txt,
-            font=os.path.join(get_fonts_dir(), get_font()),
-            font_size=100,
-            color="#FFFF00",
-            stroke_color="black",
-            stroke_width=5,
-            size=(1080, 1920),
-            method="caption",
-        )
+        # Subtitle rendering tuned for vertical 1080x1920 output.
+        # In bottom mode we use a safe-area box and smaller dynamic font size
+        # to avoid clipping long translated lines.
+        subtitle_font_path = os.path.join(get_fonts_dir(), get_font())
+
+        def _subtitle_font_size(text: str) -> int:
+            text_len = len((text or "").strip())
+            if bool(self.english_cc_bottom):
+                if text_len > 120:
+                    return 48
+                if text_len > 90:
+                    return 52
+                if text_len > 60:
+                    return 56
+                return 60
+
+            if text_len > 120:
+                return 64
+            if text_len > 80:
+                return 70
+            return 76
+
+        def generator(txt: str) -> TextClip:
+            subtitle_box = (980, 320) if bool(self.english_cc_bottom) else (980, 280)
+            return TextClip(
+                text=txt,
+                font=subtitle_font_path,
+                font_size=_subtitle_font_size(txt),
+                color="#FFFF00",
+                stroke_color="black",
+                stroke_width=5,
+                size=subtitle_box,
+                method="caption",
+            )
 
         print(colored("[+] Combining images...", "blue"))
 
@@ -976,10 +1248,39 @@ class YouTube:
             random_song = None
 
         subtitles = None
+        self.subtitle_path = ""
+        self.subtitle_preview = ""
         try:
-            subtitles_path = self.generate_subtitles(self.tts_path)
-            equalize_subtitles(subtitles_path, 10)
-            subtitles = SubtitlesClip(subtitles_path, generator).with_position(("center", "center"))
+            if self._session:
+                self._session.save_stage(
+                    "subtitles",
+                    subject=self.subject,
+                    script=self.script,
+                    tts_text=self.script,
+                    audio_path=self.tts_path,
+                    voice_used=getattr(self, "voice_used", ""),
+                    metadata=self.metadata,
+                    image_paths=self.images,
+                    english_cc_bottom=bool(self.english_cc_bottom),
+                )
+            subtitles_path = self.generate_subtitles(
+                self.tts_path,
+                translate_to_english=bool(self.english_cc_bottom),
+            )
+            try:
+                equalize_subtitles(subtitles_path, 10)
+            except Exception as eq_exc:
+                # Keep original subtitles if equalizer rejects absolute paths or fails.
+                warning(f"Subtitle equalizer failed, using raw subtitles: {eq_exc}")
+            # Keep subtitles inside a bottom safe-area to prevent cropped text.
+            subtitle_position = ("center", 1460) if bool(self.english_cc_bottom) else ("center", 1520)
+            info(
+                f"    Subtitle render: position={subtitle_position}, "
+                f"mode={'english_bottom' if bool(self.english_cc_bottom) else 'default'}"
+            )
+            subtitles = SubtitlesClip(subtitles_path, make_textclip=generator).with_position(subtitle_position)
+            self.subtitle_path = subtitles_path
+            self.subtitle_preview = self._extract_srt_preview(subtitles_path)
         except Exception as e:
             warning(f"Failed to generate subtitles, continuing without subtitles: {e}")
 
@@ -997,8 +1298,30 @@ class YouTube:
         if subtitles is not None:
             final_clip = CompositeVideoClip([final_clip, subtitles])
 
+        if self._session:
+            self._session.save_stage(
+                "video_generated",
+                subject=self.subject,
+                script=self.script,
+                tts_text=self.script,
+                subtitle_path=getattr(self, "subtitle_path", ""),
+                subtitle_preview=getattr(self, "subtitle_preview", ""),
+                english_cc_bottom=bool(getattr(self, "english_cc_bottom", False)),
+                image_paths=self.images,
+                audio_path=self.tts_path,
+                voice_used=getattr(self, "voice_used", ""),
+                metadata=self.metadata,
+            )
+
         info(f"    Writing video file (this may take a few minutes)...")
-        final_clip.write_videofile(combined_image_path, threads=threads)
+        final_clip.write_videofile(
+            combined_image_path,
+            threads=threads,
+            codec="libx264",
+            audio_codec="aac",
+            preset=get_video_encode_preset(),
+            ffmpeg_params=["-crf", str(get_video_encode_crf())],
+        )
 
         success(f'✅ Video saved to "{combined_image_path}"')
 
@@ -1011,12 +1334,13 @@ class YouTube:
         except:
             return 0
 
-    def generate_video(self, tts_instance: TTS) -> str:
+    def generate_video(self, tts_instance: TTS, skip_until_stage: str = "") -> str:
         """
         Generates a YouTube Short based on the provided niche and language.
 
         Args:
             tts_instance (TTS): Instance of TTS Class.
+            skip_until_stage (str): If provided, skip stages before this one (e.g., 'images', 'tts', 'video_generated').
 
         Returns:
             path (str): The path to the generated MP4 File.
@@ -1026,54 +1350,108 @@ class YouTube:
         info(f"🚀 [Session {session_id}] Starting YouTube Short Generation")
         info(f"   Niche: {self.niche}")
         info(f"   Language: {self.language}")
+        if skip_until_stage:
+            info(f"   🔄 Re-generating from: {skip_until_stage}")
         info(f"{'='*60}\n")
         
         self._load_resume_state()
 
+        # Map of stages to skip regenerating before
+        skip_stages = {
+            'script': ['topic'],  # Skip topic, regenerate script onward
+            'images': ['topic', 'script', 'metadata', 'prompts'],  # Skip these, regenerate images onward
+            'tts': ['topic', 'script', 'metadata', 'prompts', 'images'],  # Skip these, regenerate TTS onward
+            'subtitles': ['topic', 'script', 'metadata', 'prompts', 'images', 'tts'],  # Re-compose video to regenerate subtitles
+            'video_generated': ['topic', 'script', 'metadata', 'prompts', 'images', 'tts'],  # Skip these, regenerate video onward
+            'ready_for_review': ['topic', 'script', 'metadata', 'prompts', 'images', 'tts'],  # Re-compose and return ready_for_review
+        }
+
         # Generate only missing stages so reruns can resume without re-calling LLM.
-        if not self.subject:
-            self.generate_topic()
-            self._save_resume_state("topic")
+        if skip_until_stage not in skip_stages or 'topic' not in skip_stages.get(skip_until_stage, []):
+            if not self.subject:
+                self.generate_topic()
+                self._save_resume_state("topic")
 
-        if not self.script:
-            self.generate_script()
-            self._save_resume_state("script")
+        if skip_until_stage not in skip_stages or 'script' not in skip_stages.get(skip_until_stage, []):
+            if not self.script:
+                self.generate_script()
+                self._save_resume_state("script")
 
-        if not self.metadata or not self.metadata.get("title"):
-            self.generate_metadata()
-            self._save_resume_state("metadata")
+        if skip_until_stage not in skip_stages or 'metadata' not in skip_stages.get(skip_until_stage, []):
+            if not self.metadata or not self.metadata.get("title"):
+                self.generate_metadata()
+                self._save_resume_state("metadata")
 
-        if not self.image_prompts:
-            self.generate_prompts()
-            self._save_resume_state("prompts")
+        if skip_until_stage not in skip_stages or 'prompts' not in skip_stages.get(skip_until_stage, []):
+            if not self.image_prompts:
+                self.generate_prompts()
+                self._save_resume_state("prompts")
 
-        # Generate the Images
-        session_id = self._session.session_id if self._session else "unknown"
-        info(f"\n🎨 [Session {session_id}] === STAGE: IMAGE GENERATION ===")
-        info(f"    Generating {len(self.image_prompts)} images...")
-        
-        image_generation_failures = 0
-        for idx, prompt in enumerate(self.image_prompts, 1):
-            info(f"    [{idx}/{len(self.image_prompts)}] {prompt[:60]}...")
-            generated_image_path = self.generate_image(prompt)
-            if not generated_image_path:
-                image_generation_failures += 1
+        # Generate the Images (or skip if regenerating after this stage)
+        if skip_until_stage not in skip_stages or 'images' not in skip_stages.get(skip_until_stage, []):
+            session_id = self._session.session_id if self._session else "unknown"
+            info(f"\n🎨 [Session {session_id}] === STAGE: IMAGE GENERATION ===")
+            info(f"    Generating {len(self.image_prompts)} images...")
+            if self._session:
+                self._session.save_stage(
+                    "images",
+                    subject=self.subject,
+                    script=self.script,
+                    metadata=self.metadata,
+                    image_prompts=self.image_prompts,
+                    image_paths=self.images,
+                    english_cc_bottom=bool(self.english_cc_bottom),
+                )
+            
+            image_generation_failures = 0
+            for idx, prompt in enumerate(self.image_prompts, 1):
+                info(f"    [{idx}/{len(self.image_prompts)}] {prompt[:60]}...")
+                generated_image_path = self.generate_image(prompt)
+                if not generated_image_path:
+                    image_generation_failures += 1
 
-        self._save_resume_state("images")
+            self._save_resume_state("images")
 
-        if image_generation_failures:
-            warning(
-                f"⚠️  Failed to generate {image_generation_failures} image(s). Continuing with {len(self.images)} generated image(s)."
+            if image_generation_failures:
+                warning(
+                    f"⚠️  Failed to generate {image_generation_failures} image(s). Continuing with {len(self.images)} generated image(s)."
+                )
+
+            if not self.images:
+                warning(
+                    "⚠️  Image generation produced no usable files. The final video will use a plain background instead."
+                )
+
+        # Generate the TTS (or skip if regenerating after this stage)
+        if skip_until_stage not in skip_stages or 'tts' not in skip_stages.get(skip_until_stage, []):
+            if self._session:
+                self._session.save_stage(
+                    "tts",
+                    subject=self.subject,
+                    script=self.script,
+                    metadata=self.metadata,
+                    image_prompts=self.image_prompts,
+                    image_paths=self.images,
+                    english_cc_bottom=bool(self.english_cc_bottom),
+                )
+            self.generate_script_to_speech(
+                tts_instance,
+                force_regenerate=(skip_until_stage == 'tts'),
             )
-
-        if not self.images:
-            warning(
-                "⚠️  Image generation produced no usable files. The final video will use a plain background instead."
-            )
-
-        # Generate the TTS
-        self.generate_script_to_speech(tts_instance)
-        self._save_resume_state("tts")
+            if self._session:
+                self._session.save_stage(
+                    "tts",
+                    subject=self.subject,
+                    script=self.script,
+                    tts_text=self.script,
+                    audio_path=self.tts_path,
+                    voice_used=getattr(self, "voice_used", ""),
+                    metadata=self.metadata,
+                    image_prompts=self.image_prompts,
+                    image_paths=self.images,
+                    english_cc_bottom=bool(self.english_cc_bottom),
+                )
+            self._save_resume_state("tts")
 
         # Combine everything
         info(f"\n🎬 [Session {session_id}] === STAGE: VIDEO COMPOSITION ===")
@@ -1091,8 +1469,13 @@ class YouTube:
                 "video_generated",
                 subject=self.subject,
                 script=self.script,
+                tts_text=self.script,
+                subtitle_path=getattr(self, "subtitle_path", ""),
+                subtitle_preview=getattr(self, "subtitle_preview", ""),
+                english_cc_bottom=bool(getattr(self, "english_cc_bottom", False)),
                 image_paths=self.images,
                 audio_path=self.tts_path,
+                voice_used=getattr(self, "voice_used", ""),
                 video_path=self.video_path,
             )
 
@@ -1114,7 +1497,7 @@ class YouTube:
 
         return channel_id
 
-    def upload_video(self) -> bool:
+    def upload_video(self, is_for_kids_override: Optional[bool] = None) -> bool:
         """
         Uploads the video to YouTube.
 
@@ -1178,7 +1561,9 @@ class YouTube:
                 By.NAME, YOUTUBE_NOT_MADE_FOR_KIDS_NAME
             )
 
-            if not get_is_for_kids():
+            resolved_is_for_kids = get_is_for_kids() if is_for_kids_override is None else bool(is_for_kids_override)
+
+            if not resolved_is_for_kids:
                 is_not_for_kids_checkbox.click()
             else:
                 is_for_kids_checkbox.click()

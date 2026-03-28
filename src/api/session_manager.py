@@ -37,16 +37,9 @@ def _sessions_dir() -> str:
     return d
 
 
-def _next_session_name() -> str:
-    """Return the next sequential name: s1, s2, s3, …"""
-    existing = list_sessions()
-    # Find highest existing sN index
-    max_idx = 0
-    for meta in existing:
-        name = meta.get("name", "")
-        if name.startswith("s") and name[1:].isdigit():
-            max_idx = max(max_idx, int(name[1:]))
-    return f"s{max_idx + 1}"
+def _random_session_name() -> str:
+    """Return a short random default session name."""
+    return f"session-{uuid4().hex[:8]}"
 
 
 def _slugify_folder_name(name: str) -> str:
@@ -101,6 +94,23 @@ def _unique_session_dir_name(base_name: str, exclude_dir: Optional[str] = None) 
 class SessionManager:
     """Manages a single generation session with file-based caching."""
 
+    _MAX_META_TMP_FILES = 10
+
+    def _build_default_meta(self, session_id: str) -> dict:
+        folder_name = os.path.basename(self.session_dir)
+        return {
+            "session_id": session_id,
+            "name": folder_name,
+            "folder_name": folder_name,
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "stage": "init",
+            "subject": "",
+            "script": "",
+            "image_paths": [],
+            "audio_path": "",
+            "video_path": "",
+        }
+
     def __init__(self, session_id: str, initial_name: str = ""):
         self.session_id = session_id
         existing_dir = _find_session_dir_by_id(session_id)
@@ -108,7 +118,7 @@ class SessionManager:
         if existing_dir:
             self.session_dir = existing_dir
         else:
-            base_name = (initial_name or "").strip() or _next_session_name()
+            base_name = (initial_name or "").strip() or _random_session_name()
             folder_name = _unique_session_dir_name(base_name)
             self.session_dir = os.path.join(_sessions_dir(), folder_name)
 
@@ -122,33 +132,76 @@ class SessionManager:
         os.makedirs(self.video_dir, exist_ok=True)
 
         if os.path.exists(self.meta_path):
-            with open(self.meta_path, "r", encoding="utf-8") as f:
-                self.meta: dict = json.load(f)
+            try:
+                with open(self.meta_path, "r", encoding="utf-8") as f:
+                    self.meta: dict = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                # Recover from partially-written/corrupted metadata files.
+                self.meta = self._build_default_meta(session_id)
             self.meta.setdefault("folder_name", os.path.basename(self.session_dir))
+            self.meta.setdefault("name", os.path.basename(self.session_dir))
             if not self.meta.get("session_id"):
                 self.meta["session_id"] = session_id
             self._save_meta()
         else:
-            display_name = (initial_name or "").strip() or os.path.basename(self.session_dir)
-            self.meta = {
-                "session_id": session_id,
-                "name": display_name,
-                "folder_name": os.path.basename(self.session_dir),
-                "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-                "stage": "init",
-                "subject": "",
-                "script": "",
-                "image_paths": [],
-                "audio_path": "",
-                "video_path": "",
-            }
+            self.meta = self._build_default_meta(session_id)
             self._save_meta()
 
     # ── Persistence ────────────────────────────────────────────────────────
 
+    def _cleanup_meta_tmp_files(self, keep_latest: int = _MAX_META_TMP_FILES) -> None:
+        """Keep only the newest `session.json.*.tmp` files for this session."""
+        try:
+            base_name = os.path.basename(self.meta_path)
+            tmp_files = []
+            for entry in os.listdir(self.session_dir):
+                if not entry.startswith(f"{base_name}.") or not entry.endswith(".tmp"):
+                    continue
+
+                full_path = os.path.join(self.session_dir, entry)
+                if os.path.isfile(full_path):
+                    tmp_files.append(full_path)
+
+            # Newest first, remove anything after the keep_latest window.
+            tmp_files.sort(key=os.path.getmtime, reverse=True)
+            for stale_path in tmp_files[keep_latest:]:
+                try:
+                    os.remove(stale_path)
+                except OSError:
+                    # Best effort cleanup; ignore race/lock issues.
+                    pass
+        except OSError:
+            # If listing fails, skip cleanup and continue normal save flow.
+            pass
+
     def _save_meta(self) -> None:
-        with open(self.meta_path, "w", encoding="utf-8") as f:
+        # Best-effort cleanup of stale tmp files left from interrupted writes.
+        self._cleanup_meta_tmp_files()
+
+        # Atomic write to avoid readers seeing a partially-written JSON file.
+        tmp_path = f"{self.meta_path}.{uuid4().hex}.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(self.meta, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+
+        # Windows can transiently lock the destination file (WinError 5).
+        # Retry a few times before failing hard.
+        last_exc: Optional[Exception] = None
+        for attempt in range(6):
+            try:
+                os.replace(tmp_path, self.meta_path)
+                last_exc = None
+                break
+            except PermissionError as exc:
+                last_exc = exc
+                time.sleep(0.03 * (attempt + 1))
+
+        if last_exc is not None:
+            raise last_exc
+
+        # Run cleanup again in case multiple writers created extra temp files.
+        self._cleanup_meta_tmp_files()
 
     def save_stage(self, stage: str, **kwargs) -> None:
         self.meta["stage"] = stage
